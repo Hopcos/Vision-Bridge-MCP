@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 环境与密钥
+.env
+.env.local
+*.key
+*.pem
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
+coverage.xml
+
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 运行期产物
+*.log
+vision-bridge-mcp-server.log
+/tmp/
+!tests/fixtures/

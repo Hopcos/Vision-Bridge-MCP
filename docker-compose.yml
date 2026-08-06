@@ -1,0 +1,46 @@
+services:
+  vision-bridge-mcp-server:
+    build: .
+    image: vision-bridge-mcp-server:latest
+    container_name: vision-bridge
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      # 视觉后端：third_party(默认) | local_api | paddleocr | tesseract | custom_api | auto
+      VISION_BACKEND: ${VISION_BACKEND:-third_party}
+      # 第三方云端视觉模型（Endpoint + Key + 模型名）
+      VISION_THIRD_PARTY_API_BASE: ${VISION_THIRD_PARTY_API_BASE:-}
+      VISION_THIRD_PARTY_API_KEY: ${VISION_THIRD_PARTY_API_KEY:-}
+      VISION_THIRD_PARTY_MODEL_NAME: ${VISION_THIRD_PARTY_MODEL_NAME:-}
+      # 本地多模态模型（当访问宿主机部署的服务时使用）
+      VISION_API_BASE: ${VISION_API_BASE:-http://host.docker.internal:8001/v1}
+      VISION_API_KEY: ${VISION_API_KEY:-any}
+      VISION_MODEL_NAME: ${VISION_MODEL_NAME:-Qwen2-VL-7B}
+      VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-4096}
+      VISION_TIMEOUT: ${VISION_TIMEOUT:-60}
+      # OCR 后端参数
+      VISION_OCR_LANG: ${VISION_OCR_LANG:-ch}
+      VISION_OCR_USE_GPU: ${VISION_OCR_USE_GPU:-false}
+      VISION_TESSERACT_LANG: ${VISION_TESSERACT_LANG:-chi_sim+eng}
+      # 自定义 API 后端
+      VISION_CUSTOM_API_URL: ${VISION_CUSTOM_API_URL:-}
+      # MCP Server 配置
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8081
+      MCP_AUTH_MODE: ${MCP_AUTH_MODE:-none}
+      MCP_SERVER_TOKEN: ${MCP_SERVER_TOKEN:-}
+      MCP_LOG_LEVEL: ${MCP_LOG_LEVEL:-INFO}
+    volumes:
+      # 需要时挂载中文字体（OCR / 视觉模型文字渲染）
+      - ./fonts:/root/.fonts:ro
+    # 健康检查：依赖 MCP SDK 探测服务是否就绪，可替换为 /health
+    # healthcheck:
+    #   test: ["CMD", "curl", "-sf", "http://localhost:8081/health"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    extra_hosts:
+      # 让容器内访问宿主机的本地视觉模型 API
+      - "host.docker.internal:host-gateway"
