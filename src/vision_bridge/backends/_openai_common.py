@@ -21,6 +21,7 @@ from ..errors import (
     BackendUnavailableError,
 )
 from ..utils import make_data_url
+from .base import BackendStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +37,29 @@ class ChatResponse:
 
 
 def build_messages(image_data_url: str, prompt: str) -> list[dict[str, Any]]:
-    """构造 OpenAI 兼容的 messages，图片走 image_url（data URL）。"""
+    """构造 OpenAI 兼容的 messages，图片走 image_url（data URL）。
+
+    采用「system + image + text」结构：system 明确视觉角色并要求严格基于图片作答，
+    避免部分兼容网关忽略图片、或模型产出与图片无关的内容。
+    """
     return [
+        {
+            "role": "system",
+            "content": (
+                "你是一个视觉理解助手。用户会发送一张图片并提出问题，"
+                "请严格基于图片实际可见内容回答，不要编造图片中不存在的信息。"
+            ),
+        },
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": image_data_url}},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_data_url, "detail": "high"},
+                },
                 {"type": "text", "text": prompt},
             ],
-        }
+        },
     ]
 
 

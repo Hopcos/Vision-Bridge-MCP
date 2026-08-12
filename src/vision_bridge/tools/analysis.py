@@ -20,7 +20,7 @@ async def _load_raw(src: str, ctx: ToolContext) -> bytes:
     """仅加载图片字节（用于拼接等需要原始像素的场景）。"""
     from ._common import _resolve_image_source
 
-    s = await _resolve_image_source(src, max_size=_root_max_size(ctx))
+    s = await _resolve_image_source(src, max_size=_root_max_size(ctx), settings=ctx.settings)
     return s.data
 
 

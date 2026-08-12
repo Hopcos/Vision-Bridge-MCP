@@ -103,6 +103,21 @@ class Settings(BaseSettings):
     # ---- 图片处理与并发 ---------------------------------------------------
     vision_max_image_size: int = 20 * 1024 * 1024  # 20MB
     vision_max_concurrent: int = 3
+    # 发送给视觉模型前的压缩目标（KB）。> 0 时，预处理会迭代降低 JPEG 质量
+    # 直到输出不超过该字节数；0 表示不按字节数压缩（仅按 max_width/max_height 缩放）。
+    vision_compress_target_kb: int = 0
+    # 压缩迭代时的最低 JPEG 质量（1-95），低于此值则停止降质，改用进一步缩小尺寸。
+    vision_compress_min_quality: int = 40
+    # HTTP 图片下载：对需要授权的远程图片（如 Atlassian/Jira/Confluence 附件）附加的
+    # 认证请求头。支持「Bearer <token>」或「Basic <base64>」两种写法，留空则不附加。
+    vision_http_download_token: str | None = None
+    vision_http_download_token_type: Literal["bearer", "basic", "header"] = "bearer"
+    # 额外的自定义下载请求头（JSON 字符串，如 '{"X-Atlassian-Token":"no-check"}'）。
+    vision_http_download_headers: str | None = None
+    # Atlassian 附件下载需要 Basic 认证（邮箱 : API Token/PAT）。
+    # 设置此项（你的 Atlassian 登录邮箱）后，会自动用 Basic 认证访问 Confluence/Jira
+    # REST API 下载附件，正确处理 /wiki/download 网页链接无法直接下载的问题。
+    vision_atlassian_user: str | None = None
 
     # ---- MCP Server ------------------------------------------------------
     mcp_transport: Literal["stdio", "http"] = "stdio"
@@ -140,6 +155,20 @@ class Settings(BaseSettings):
     def _validate_max_concurrent(cls, value: int) -> int:
         if value < 1:
             raise ValueError("VISION_MAX_CONCURRENT 至少为 1")
+        return value
+
+    @field_validator("vision_compress_target_kb")
+    @classmethod
+    def _validate_compress_target_kb(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("VISION_COMPRESS_TARGET_KB 不能为负数")
+        return value
+
+    @field_validator("vision_compress_min_quality")
+    @classmethod
+    def _validate_compress_min_quality(cls, value: int) -> int:
+        if not 1 <= value <= 95:
+            raise ValueError("VISION_COMPRESS_MIN_QUALITY 必须在 1-95 之间")
         return value
 
     @model_validator(mode="after")

@@ -20,6 +20,7 @@ from vision_bridge.errors import BackendConfigError, BackendResponseError, Backe
 
 def _mk_backend(**over):
     settings = create_settings(
+        _env_file=None,
         vision_backend="third_party",
         vision_third_party_api_base="https://api.example.com/v1",
         vision_third_party_api_key="sk-secret",
@@ -66,7 +67,7 @@ class TestBuild:
     def test_requires_config(self):
         with pytest.raises(ValueError):
             # 缺 base
-            ThirdPartyBackend(create_settings(vision_backend="third_party"))
+            ThirdPartyBackend(create_settings(_env_file=None, vision_backend="third_party"))
 
     def test_url_and_model(self):
         b = _mk_backend()
@@ -79,8 +80,15 @@ class TestBuild:
         assert b.auth_headers["Authorization"] == "Bearer sk-secret"
 
     def test_missing_key(self):
+        # base 给了但 key 为空 -> 报错（校验在 Settings 构造时即触发）
         with pytest.raises(ValueError, match="VISION_THIRD_PARTY_API_KEY"):
-            _mk_backend(vision_third_party_api_key="")
+            create_settings(
+                _env_file=None,
+                vision_backend="third_party",
+                vision_third_party_api_base="https://api.example.com/v1",
+                vision_third_party_api_key="",
+                vision_third_party_model_name="qwen-vl-max",
+            )
 
 
 class TestDescribe:

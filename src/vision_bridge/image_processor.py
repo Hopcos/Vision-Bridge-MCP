@@ -60,6 +60,8 @@ async def preprocess_image(
     max_height: int = 1080,
     output_format: str = FORMAT,
     quality: int = QUALITY,
+    target_bytes: int = 0,
+    min_quality: int = 40,
 ) -> PreprocessedImage:
     """图像预处理管线（异步包装，内部 CPU 密集部分同步执行）。
 
@@ -69,6 +71,8 @@ async def preprocess_image(
         max_height: 缩放目标最大高度。
         output_format: 输出格式（JPEG / PNG / WEBP）。
         quality: JPEG 压缩质量 1-100。
+        target_bytes: 压缩目标字节数上限；> 0 时迭代降低质量 / 尺寸直到满足。
+        min_quality: 压缩迭代时的最低 JPEG 质量（低于则改为进一步缩小尺寸）。
 
     返回:
         PreprocessedImage 对象（JPEG 字节、宽高、原始格式、说明）。
@@ -140,7 +144,7 @@ async def preprocess_image(
     scaled = _scale(img, max_width, max_height)
     img = scaled
 
-    # 编码为指定格式
+    # 编码为指定格式（可选：迭代压缩到目标字节数）
     out = io.BytesIO()
     save_kwargs: dict = {}
     if output_format.upper() == "JPEG":
@@ -155,15 +159,30 @@ async def preprocess_image(
         raise ImageLoadError(f"图片编码失败: {e}") from e
     encoded = out.getvalue()
 
+    # 按目标字节数压缩（仅 JPEG/WEBP 支持 quality 迭代；PNG 走尺寸缩放）
+    note_compress = ""
+    if target_bytes and target_bytes > 0 and len(encoded) > target_bytes and output_format.upper() in {
+        "JPEG",
+        "WEBP",
+    }:
+        encoded, img, note_compress = _compress_to_target(
+            img, target_bytes, output_format.upper(), quality, min_quality
+        )
+    elif target_bytes and target_bytes > 0 and len(encoded) > target_bytes and output_format.upper() == "PNG":
+        # PNG 无损，仅能通过缩小尺寸压体积
+        encoded, img, note_compress = _compress_png_to_target(img, target_bytes)
+
     # 最终大小校验（统一 < 处理上限，默认 5MB）
     validate_file_size(len(encoded), 5 * 1024 * 1024)
 
     mime = _mime_for_format(output_format.upper())
-    format_note = (
-        "原图含透明通道，已合成到白色背景。"
-        if original_format in {"PNG", "GIF", "WEBP", "BMP", "TIFF"} and _had_alpha
-        else ""
-    )
+    had_alpha = original_format in {"PNG", "GIF", "WEBP", "BMP", "TIFF"} and _had_alpha
+    format_note_parts = []
+    if had_alpha:
+        format_note_parts.append("原图含透明通道，已合成到白色背景。")
+    if note_compress:
+        format_note_parts.append(note_compress)
+    format_note = " ".join(format_note_parts)
     return PreprocessedImage(
         image_bytes=encoded,
         mime_type=mime,
@@ -172,6 +191,80 @@ async def preprocess_image(
         original_format=original_format,
         format_note=format_note,
     )
+
+
+def _compress_to_target(
+    img: Image.Image,
+    target_bytes: int,
+    fmt: str,
+    quality: int,
+    min_quality: int,
+) -> tuple[bytes, Image.Image, str]:
+    """迭代降低 JPEG/WEBP 质量与尺寸直到输出 ≤ target_bytes。
+
+    策略：先逐步降低 quality（至 min_quality），仍超标则按 0.85 系数逐次缩小尺寸，
+    两者交替进行，最多 12 轮。返回 (字节, 最终图像, 说明文本)。
+    """
+    scale = 1.0
+    cur_quality = quality
+    encoded = b""
+    rounds = 0
+    last_img = img
+    while rounds < 12:
+        out = io.BytesIO()
+        kwargs = {"quality": cur_quality}
+        if fmt == "JPEG":
+            kwargs["progressive"] = True
+        elif fmt == "WEBP":
+            kwargs["method"] = 4
+        try:
+            last_img.save(out, format=fmt, **kwargs)
+        except Exception as e:
+            raise ImageLoadError(f"图片压缩编码失败: {e}") from e
+        encoded = out.getvalue()
+        if len(encoded) <= target_bytes:
+            break
+        # 优先降质；质量已到下限则缩尺寸
+        if cur_quality > min_quality:
+            cur_quality = max(min_quality, cur_quality - 15)
+        else:
+            scale *= 0.85
+            w, h = img.size
+            new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            last_img = img.resize(new_size, Image.LANCZOS)
+        rounds += 1
+    note = (
+        f"已压缩至 {len(encoded) / 1024:.1f}KB"
+        f"（目标 ≤{target_bytes / 1024:.0f}KB，质量={cur_quality}，"
+        f"尺寸={last_img.width}x{last_img.height}）。"
+    )
+    return encoded, last_img, note
+
+
+def _compress_png_to_target(
+    img: Image.Image, target_bytes: int
+) -> tuple[bytes, Image.Image, str]:
+    """PNG 无损压缩：仅靠逐步缩小尺寸逼近目标字节数。"""
+    scale = 1.0
+    encoded = b""
+    last_img = img
+    rounds = 0
+    while rounds < 12:
+        out = io.BytesIO()
+        last_img.save(out, format="PNG", optimize=True)
+        encoded = out.getvalue()
+        if len(encoded) <= target_bytes:
+            break
+        scale *= 0.8
+        w, h = img.size
+        new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+        last_img = img.resize(new_size, Image.LANCZOS)
+        rounds += 1
+    note = (
+        f"已压缩至 {len(encoded) / 1024:.1f}KB"
+        f"（目标 ≤{target_bytes / 1024:.0f}KB，尺寸={last_img.width}x{last_img.height}）。"
+    )
+    return encoded, last_img, note
 
 
 def _scale(img: Image.Image, max_width: int, max_height: int) -> Image.Image:
@@ -248,9 +341,17 @@ async def preprocess_pipeline(
     *,
     max_width: int = 1920,
     max_height: int = 1080,
+    target_bytes: int = 0,
+    min_quality: int = 40,
 ) -> PreprocessedImage:
     """供外部调用的统一入口（语义化命名，内部仍是 preprocess_image）。"""
-    return await preprocess_image(image_bytes, max_width=max_width, max_height=max_height)
+    return await preprocess_image(
+        image_bytes,
+        max_width=max_width,
+        max_height=max_height,
+        target_bytes=target_bytes,
+        min_quality=min_quality,
+    )
 
 
 async def load_file_to_bytes(path: str) -> bytes:
@@ -274,4 +375,6 @@ __all__ = [
     "preprocess_pipeline",
     "strip_exif",
     "load_file_to_bytes",
+    "_compress_to_target",
+    "_compress_png_to_target",
 ]

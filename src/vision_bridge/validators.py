@@ -121,10 +121,37 @@ def resolve_local_path(path: str, *, allowed_dirs: list[str] | None = None) -> P
 # ---------------------------------------------------------------------------
 
 
-def validate_base64(data: str) -> str | None:
-    """校验 base64 字符串（data URL 或纯 base64）。
+def _normalize_base64_payload(payload: str) -> str:
+    """把前端传来的「base64 二进制」归一化为标准 base64。
 
-    返回：校验通过时返回去掉前缀的纯 base64 字符串；无效返回 None。
+    - 去除所有空白（空格 / 制表符 / 换行）：前端常按 76 列折行或带尾随换行；
+    - URL-safe 字母 ``-`` / ``_`` 还原为 ``+`` / ``/``；
+    - 补齐 ``=`` 填充，使长度为 4 的倍数。
+
+    返回归一化后的纯 base64 字符串（解码工作交由调用方完成）。
+    """
+    # 去除全部空白字符
+    cleaned = "".join(payload.split())
+    # URL-safe base64 → 标准 base64
+    cleaned = cleaned.replace("-", "+").replace("_", "/")
+    # 补齐填充
+    pad = len(cleaned) % 4
+    if pad:
+        cleaned += "=" * (4 - pad)
+    return cleaned
+
+
+def validate_base64(data: str) -> str | None:
+    """校验 base64 字符串（data URL 或纯 base64），兼容前端的「base64 二进制」。
+
+    支持：
+    - 标准 base64（含/不含 ``=`` 填充）；
+    - 含空白 / 换行的 base64（前端按列折行传输）；
+    - URL-safe base64（``-`` / ``_`` 字母）；
+    - data URL（``data:<mime>;base64,...``）。
+
+    返回：校验通过时返回可被 ``base64.b64decode`` 直接解码的纯 base64 字符串；
+    无效返回 None。
     """
     if not data or not isinstance(data, str):
         return None
@@ -143,11 +170,18 @@ def validate_base64(data: str) -> str | None:
         payload = text[comma + 1 :]
     else:
         payload = text
+
+    normalized = _normalize_base64_payload(payload)
+    # 归一化后若为空或包含非 base64 字符，直接判无效
+    if not normalized:
+        return None
+    if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=" for c in normalized):
+        return None
     try:
-        base64.b64decode(payload, validate=True)
+        base64.b64decode(normalized, validate=False)
     except (binascii.Error, ValueError):
         return None
-    return payload
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +292,7 @@ __all__ = [
     "validate_file_size",
     "resolve_local_path",
     "validate_base64",
+    "_normalize_base64_payload",
     "is_private_host",
     "validate_http_url",
     "guess_download_ext",

@@ -24,28 +24,31 @@ def test_defaults():
 
 
 def test_default_backend_is_third_party():
-    # 默认 VISION_BACKEND 是 third_party（第三方云端优先）
-    assert Settings(_env_file=None).model_fields["vision_backend"].default == "third_party"
+    # 默认 VISION_BACKEND 是 third_party（第三方云端优先）。仅检查字段声明默认值，
+    # 不实例化 Settings（实例化 third_party 需 Endpoint/Key 配置，会触发校验）。
+    from vision_bridge.config import BACKEND_THIRD_PARTY
+
+    assert Settings.model_fields["vision_backend"].default == BACKEND_THIRD_PARTY
 
 
 def test_invalid_backend_rejected():
     with pytest.raises(ValueError):
-        create_settings(vision_backend="not-a-backend")
+        create_settings(_env_file=None, vision_backend="not-a-backend")
 
 
 def test_local_api_requires_config():
     with pytest.raises(ValueError, match="VISION_API_BASE"):
-        create_settings(vision_backend="local_api")
+        create_settings(_env_file=None, vision_backend="local_api")
 
 
 def test_custom_api_requires_url():
     with pytest.raises(ValueError, match="VISION_CUSTOM_API_URL"):
-        create_settings(vision_backend="custom_api")
+        create_settings(_env_file=None, vision_backend="custom_api")
 
 
 def test_third_party_requires_base():
     with pytest.raises(ValueError, match="VISION_THIRD_PARTY_API_BASE"):
-        create_settings(vision_backend="third_party")
+        create_settings(_env_file=None, vision_backend="third_party")
 
 
 def test_third_party_requires_key():
@@ -54,6 +57,7 @@ def test_third_party_requires_key():
     # base 给了但缺 key -> 报错
     with pytest.raises(ValueError, match="VISION_THIRD_PARTY_API_KEY"):
         create_settings(
+            _env_file=None,
             vision_backend="third_party",
             vision_third_party_api_base="https://x.com/v1",
             vision_third_party_api_key="",
@@ -63,6 +67,7 @@ def test_third_party_requires_key():
 def test_third_party_requires_model():
     with pytest.raises(ValueError, match="VISION_THIRD_PARTY_MODEL_NAME"):
         create_settings(
+            _env_file=None,
             vision_backend="third_party",
             vision_third_party_api_base="https://x.com/v1",
             vision_third_party_api_key="sk-xxx",
@@ -71,6 +76,7 @@ def test_third_party_requires_model():
 
 def test_backend_name_with_model():
     s = create_settings(
+        _env_file=None,
         vision_backend="local_api",
         vision_api_base="http://x:1/v1",
         vision_model_name="Qwen2-VL",
@@ -80,6 +86,7 @@ def test_backend_name_with_model():
 
 def test_backend_name_with_third_party():
     s = create_settings(
+        _env_file=None,
         vision_backend="third_party",
         vision_third_party_api_base="https://x.com/v1",
         vision_third_party_api_key="sk-xxx",

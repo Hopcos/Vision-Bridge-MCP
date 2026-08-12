@@ -34,6 +34,11 @@
 - **专用分析工具**：UI 布局提取、图表解析、图片对比
 - **批量图片处理**：并发 ≤ VISION_MAX_CONCURRENT（默认 3）
 - **完整图像预处理管线**：缩放、压缩、去 EXIF 元数据、防 decompression bomb
+- **前端 base64 二进制友好**：`image_source` 接受标准 base64、data URL、按列折行含换行的 base64、URL-safe（`-`/`_`）及无 `=` 填充的 base64，前端直接传二进制图片的 base64 即可
+- **可配置压缩**：`VISION_COMPRESS_TARGET_KB` 可将发往模型的图片压缩到指定字节数（如 30KB）以内，迭代降质 + 缩尺寸，避免大图浪费 token / 限流
+- **HTTP 图片下载**：`image_source` 支持公网 URL 直接下载识别；对需授权的远程图片（如 Atlassian / Jira / Confluence 附件）可配置 `VISION_HTTP_DOWNLOAD_TOKEN` 携带 Bearer / Basic 认证头
+- **Atlassian / Jira 附件图片下载**：完美支持几类图片来源——**含图片的 Confluence 页面 URL**（`/wiki/spaces/PE/pages/<pageId>/<title>`，自动从页面正文解析 `<ac:image>` 引用的真实图片）、`/wiki/download/attachments/<pageId>/<file>` 网页版图片链接、附件 REST 下载直链（`/rest/api/content/<pageId>/child/attachment/<attId>/download`）、以及 `jira:attachment:<id>` / `confluence:attachment:att<id>` 引用。配置 `VISION_ATLASSIAN_USER`（邮箱）+ `VISION_HTTP_DOWNLOAD_TOKEN`（PAT，Type 设 `basic`）后，自动用 Basic 认证走 REST API 下载：Confluence 先由页面正文/附件列表匹配到真实附件、取其 `_links.download`（相对路径以 `/wiki` 前缀补全）再取二进制；Jira 直接 `GET /rest/api/3/attachment/content/{id}`。彻底解决「0 字节 / 重定向到登录页 / 选错历史附件」问题
+- **意图提示词自动注入**：当用户 prompt 命中「颜色 / 文字 / 尺寸 / 布局 / 图表」等意图关键词时，自动追加专业化提示语，提升识别精确度
 - **双传输模式**：stdio（本地客户端）+ HTTP（Streamable HTTP / SSE，远程部署）
 - **安全优先**：SSRF 防护、路径校验、base64 长度校验、并发限流、密钥脱敏
 
@@ -401,6 +406,12 @@ vision-bridge-mcp-server --transport http --port 8081 \
 | VISION_CUSTOM_API_TIMEOUT | int | 否 | 30 | 自定义 API 超时（秒） |
 | VISION_MAX_IMAGE_SIZE | int | 否 | 20971520 | 原始图片最大字节数（20MB） |
 | VISION_MAX_CONCURRENT | int | 否 | 3 | 最大并发处理数 |
+| VISION_COMPRESS_TARGET_KB | int | 否 | 0 | 发送给模型前的压缩目标（KB），>0 时迭代降质/缩尺寸；0=不压缩 |
+| VISION_COMPRESS_MIN_QUALITY | int | 否 | 40 | 压缩迭代最低 JPEG 质量（1-95） |
+| VISION_HTTP_DOWNLOAD_TOKEN | str | 否 | - | 下载需授权远程图片的 Token（如 Atlassian PAT / API Token） |
+| VISION_HTTP_DOWNLOAD_TOKEN_TYPE | str | 否 | bearer | bearer / basic / header |
+| VISION_ATLASSIAN_USER | str | 否 | - | Atlassian 附件下载的 Basic 认证用户（登录邮箱）；配置后自动走 REST API 下载 |
+| VISION_HTTP_DOWNLOAD_HEADERS | str | 否 | - | 额外下载请求头（JSON），如 `{"X-Atlassian-Token":"no-check"}` |
 | MCP_TRANSPORT | str | 否 | stdio | 传输模式（stdio / http） |
 | MCP_HOST | str | 否 | 127.0.0.1 | HTTP 监听地址 |
 | MCP_PORT | int | 否 | 8081 | HTTP 监听端口 |
@@ -437,7 +448,7 @@ Options:
 
 | 参数 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| image_source | 是 | - | 本地路径 / base64(date URL) / URL |
+| image_source | 是 | - | 本地路径 / base64(含 data URL、带换行/URL-safe/无填充的「base64 二进制」) / URL |
 | prompt | 否 | - | 针对图片的具体问题 |
 | detail_level | 否 | detailed | brief / detailed / raw_text |
 | max_width | 否 | 1920 | 缩放最大宽度 |

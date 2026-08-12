@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 
 from ..errors import VisionError
+from ..prompts import get_prompt
 from ._common import (
     PreparedImage,
     assert_backend_available,
@@ -65,7 +66,8 @@ async def batch_describe_images(
                 return f"{label} 预处理失败: {_err_short(prep)}"
             try:
                 async with sem:
-                    text, latency = await timed_describe(backend, prep.data, prompt or "", detail_level)
+                    prompt_text = get_prompt(detail_level, prompt or None)
+                    text, latency = await timed_describe(backend, prep.data, prompt_text, detail_level)
                     if ctx.registry is not None:
                         ctx.registry.record_success(latency)
                 return f"{label} {format_backend_prefix(backend)}\n{text.strip()}"

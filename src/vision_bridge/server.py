@@ -67,7 +67,16 @@ class VisionBridgeServer:
             instructions=(
                 "使用 describe_image 工具分析图片；识别文字请优先用 read_image_text；"
                 "UI 设计稿用 extract_ui_layout；架构图/流程图用 extract_diagram_info；"
-                "如后端支持 brief/detailed/raw_text 三种粒度，可自行选择。"
+                "如后端支持 brief/detailed/raw_text 三种粒度，可自行选择。\n"
+                "关键能力：所有接受 image_source 参数的工具都能直接传入以下类型的"
+                "Atlassian 图片来源，服务端会自动用 Basic 认证经 REST API 下载图片后分析：\n"
+                "- Confluence 页面 URL（如 https://xxx.atlassian.net/wiki/spaces/<KEY>/pages/<pageId>/<title>）"
+                "，自动解析页面正文里展示的图片；\n"
+                "- Confluence 附件直链（/rest/api/content/<pageId>/child/attachment/<attId>/download）；\n"
+                "- /wiki/download/attachments/<pageId>/<file> 网页版图片链接；\n"
+                "- 引用 imageRef：confluence:attachment:att<id> 或 jira:attachment:<id>。\n"
+                "因此当用户给的是 Atlassian/Confluence/Jira 页面或附件链接、并希望识别其中的图片时，"
+                "直接把该 URL/引用作为 image_source 调用视觉工具即可，无需手动下载或转 base64。"
             ),
             log_level=self.settings.mcp_log_level,
         )
@@ -125,44 +134,65 @@ class VisionBridgeServer:
                 ),
             )
 
+        # 提示词：image_source 支持 Atlassian / Confluence / Jira 图片来源。
+        # 命中时，服务端会用 Basic 认证经 REST API 自动下载图片后再分析。
+        # 措辞强调「触发条件」，让 MCP client 在遇到 Atlassian/Confluence/Jira
+        # 页面、附件、imageRef 相关需求时优先选用本工具。
+        _ATLASSIAN_HINT = (
+            "【应用场景】当用户要求查看/识别/提取文字/分析某张 Atlassian、Confluence、Jira "
+            "图片或页面里的图片时，直接把以下任意形式作为 image_source 传入（无需手动下载或转 base64，"
+            "服务端会自动用 Basic 认证经 REST API 下载后再分析）："
+            "Confluence 页面 URL，如 https://…/wiki/spaces/<KEY>/pages/<pageId>/<title>；"
+            "Confluence 附件下载直链 /rest/api/content/<pageId>/child/attachment/<attId>/download；"
+            "/wiki/download/attachments/<pageId>/<file>；"
+            "imageRef：confluence:attachment:att<id> 或 jira:attachment:<id>。"
+        )
+
         tool(
             "describe_image",
             "将图片转换为文字描述（核心工具）。image_source 支持本地路径 / base64(data URL) / URL。"
             "prompt 可提问，如：'这段代码报了什么错？'。"
-            "detail_level: brief(简要)/detailed(详细)/raw_text(纯文字)。",
+            "detail_level: brief(简要)/detailed(详细)/raw_text(纯文字)。"
+            + _ATLASSIAN_HINT,
             describe_image,
         )
         tool(
             "read_image_text",
             "专门提取图片中的文字内容（OCR 快捷方式），自动使用 raw_text detail_level。"
-            "适用：终端截图、错误弹窗、代码截图、文档照片。",
+            "适用：终端截图、错误弹窗、代码截图、文档照片。"
+            + _ATLASSIAN_HINT,
             read_image_text,
         )
         tool(
             "get_image_info",
-            "获取图片基本信息（格式、尺寸、颜色模式等），不调用视觉模型，纯本地处理。",
+            "获取图片基本信息（格式、尺寸、颜色模式等），不调用视觉模型，纯本地处理。"
+            + _ATLASSIAN_HINT,
             get_image_info,
         )
         tool(
             "compare_images",
-            "对比两张图片（拼接后送入视觉模型），返回结构化差异描述。focus 可指定对比焦点。",
+            "对比两张图片（拼接后送入视觉模型），返回结构化差异描述。focus 可指定对比焦点。"
+            + _ATLASSIAN_HINT,
             compare_images,
         )
         tool(
             "extract_ui_layout",
             "分析 UI 截图，输出结构化的布局描述（含颜色/间距/组件建议），适合前端代码生成。"
-            "framework 目标框架。",
+            "framework 目标框架。"
+            + _ATLASSIAN_HINT,
             extract_ui_layout,
         )
         tool(
             "extract_diagram_info",
             "分析架构图/流程图/ER图/时序图，输出结构化信息。"
-            "diagram_type: auto/architecture/flowchart/er/sequence。",
+            "diagram_type: auto/architecture/flowchart/er/sequence。"
+            + _ATLASSIAN_HINT,
             extract_diagram_info,
         )
         tool(
             "batch_describe_images",
-            "批量处理多张图片（最多10张），返回逐张描述，并发限制为 VISION_MAX_CONCURRENT。",
+            "批量处理多张图片（最多10张），返回逐张描述，每张 image_sources 项支持路径/base64/URL"
+            + _ATLASSIAN_HINT,
             batch_describe_images,
         )
         tool(
@@ -217,6 +247,10 @@ class VisionBridgeServer:
                 "port": s.mcp_port,
                 "max_image_size": s.vision_max_image_size,
                 "max_concurrent": s.vision_max_concurrent,
+                "compress_target_kb": s.vision_compress_target_kb,
+                "compress_min_quality": s.vision_compress_min_quality,
+                "http_download_token_configured": bool(s.vision_http_download_token),
+                "http_download_token_type": s.vision_http_download_token_type,
                 "supported_formats": ["PNG", "JPG", "JPEG", "GIF", "BMP", "TIFF", "WebP"],
                 "detail_levels": ["brief", "detailed", "raw_text"],
             }

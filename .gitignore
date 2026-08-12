@@ -27,6 +27,9 @@ coverage.xml
 .ruff_cache/
 .tox/
 
+# 本地模型文件（下载的 embedding / OCR 模型，体积大）
+.models/
+
 # IDE
 .idea/
 .vscode/

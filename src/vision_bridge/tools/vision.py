@@ -159,7 +159,9 @@ async def get_image_info(
     from ._common import _resolve_image_source
 
     try:
-        src = await _resolve_image_source(image_source, max_size=source_max_size(ctx.settings))
+        src = await _resolve_image_source(
+            image_source, max_size=source_max_size(ctx.settings), settings=ctx.settings
+        )
         import io as _io
 
         from PIL import Image

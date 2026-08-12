@@ -24,11 +24,64 @@ PROMPTS: dict[str, str] = {
 
 
 def get_prompt(detail_level: str, user_prompt: str | None = None) -> str:
-    """根据 detail_level 与用户自定义问题拼装发送给视觉模型的 prompt。"""
+    """根据 detail_level 与用户自定义问题拼装发送给视觉模型的 prompt。
+
+    当 user_prompt 命中特定意图关键词（颜色 / 文字 / 尺寸 / 布局 / 图表 等）时，
+    自动追加专业化的提示语，使模型更精确地识别用户意图。
+    """
     base = PROMPTS.get(detail_level, PROMPTS["detailed"])
+    intent_hint = _intent_hint(user_prompt) if user_prompt else ""
     if user_prompt:
-        return f"{base}\n\n针对这张图片的问题：{user_prompt}"
+        parts = [base, f"针对这张图片的问题：{user_prompt}"]
+        if intent_hint:
+            parts.append(intent_hint)
+        return "\n\n".join(parts)
+    if intent_hint:
+        return f"{base}\n\n{intent_hint}"
     return base
+
+
+# 意图关键词 → 专业化提示语。命中任一关键词即追加对应指令，
+# 让视觉模型聚焦到用户真正想要的维度（颜色 / 文字 / 尺寸 / 布局 / 图表）。
+_INTENT_HINTS: list[tuple[tuple[str, ...], str]] = [
+    (
+        ("颜色", "配色", "color", "colour", "主色", "背景色", "hex"),
+        "请重点提取图片中的颜色信息：给出主要颜色的 hex 值、所属区域及其用途"
+        "（如背景、文字、按钮），并按出现面积排序。",
+    ),
+    (
+        ("文字", "文本", "字", "ocr", "内容", "文字内容", "提取"),
+        "请重点提取图片中的所有可见文字，逐行保持原始位置与换行，"
+        "不要添加任何解释或描述。",
+    ),
+    (
+        ("尺寸", "大小", "像素", "间距", "边距", "padding", "margin", "字体大小"),
+        "请重点估算图片中各元素的尺寸信息：宽度 / 高度（像素）、字体大小、"
+        "元素间距与边距，尽量给出具体数值。",
+    ),
+    (
+        ("布局", "结构", "layout", "组件", "层级", "排版"),
+        "请重点描述图片的布局结构：整体排列方式（flex / grid / 绝对定位）、"
+        "组件层级关系及各区块的内容。",
+    ),
+    (
+        ("图表", "流程图", "架构图", "er图", "时序图", "diagram", "流程"),
+        "请重点解析图片中的图表结构：识别图表类型，列出节点 / 连接 / 数据流向 / "
+        "分支条件等结构化信息。",
+    ),
+]
+
+
+def _intent_hint(user_prompt: str | None) -> str:
+    """根据用户 prompt 命中的意图关键词返回附加专业化提示语，未命中返回空串。"""
+    if not user_prompt:
+        return ""
+    text = user_prompt.lower()
+    hints: list[str] = []
+    for keywords, hint in _INTENT_HINTS:
+        if any(kw.lower() in text for kw in keywords):
+            hints.append(hint)
+    return "\n".join(hints)
 
 
 # ---------------------------------------------------------------------------

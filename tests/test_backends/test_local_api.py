@@ -70,15 +70,17 @@ class TestBuild:
     def test_messages(self):
         data_url = "data:image/png;base64,AAAA"
         msgs = _build_messages(data_url, "描述")
-        assert msgs[0]["role"] == "user"
-        content = msgs[0]["content"]
+        # 结构：system（视觉角色）+ user（image + text）
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "user"
+        content = msgs[1]["content"]
         assert content[0]["type"] == "image_url"
         assert content[0]["image_url"]["url"] == data_url
         assert content[1]["type"] == "text"
 
     def test_requires_base(self):
         with pytest.raises(ValueError):
-            LocalAPIBackend(create_settings(vision_backend="local_api"))
+            LocalAPIBackend(create_settings(_env_file=None, vision_backend="local_api"))
 
 
 class TestExtract:
@@ -119,7 +121,8 @@ class TestDescribe:
 
         payload = _json.loads(body) if isinstance(body, bytes) else _json.loads(requests[0].content)
         assert payload["model"] == "test-vl"
-        assert payload["messages"][0]["content"][0]["type"] == "image_url"
+        # messages[0] 是 system，messages[1] 是 user（image_url 在前）
+        assert payload["messages"][1]["content"][0]["type"] == "image_url"
 
     @pytest.mark.asyncio
     async def test_http_error(self, monkeypatch):
