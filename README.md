@@ -351,6 +351,11 @@ docker compose up -d   # 之后在 .env 中设置 VISION_BACKEND=paddleocr
   `extra_hosts` 存在；`docker run` 需自行加 `--add-host host.docker.internal:host-gateway`。
 - **`MCP_AUTH_MODE=token` 但未设置 `MCP_SERVER_TOKEN`**：CLI 会因缺少 Token 启动失败，
   这是有意为之的显式报错，设置 Token 后重启即可。
+- **构建时报 `resolve image config for docker-image://docker.io/docker/dockerfile:1`**：
+  Dockerfile 首行的 `# syntax=docker/dockerfile:1` 需要联网从 docker.io 拉取
+  「语法解析器」镜像，在内网 / 离线 / 私有镜像源环境下会拉取失败。本 Dockerfile
+  未用到任何新版语法特性，删除该行后即可用内置解析器正常构建；若内网用镜像代理，
+  也可改为 `# syntax=docker/dockerfile:1@sha256:<内网可用的摘要>` 或直接用代理地址。
 
 ---
 
