@@ -340,6 +340,57 @@ docker compose up -d   # 之后在 .env 中设置 VISION_BACKEND=paddleocr
 （如 Noto Sans CJK / 思源黑体的 `.ttf` / `.otf`），compose 会自动挂载到容器内
 `/home/vision/.fonts`（镜像以非 root 用户 uid=1000 运行，家目录即 `/home/vision`）。
 
+### 日志落盘（按日期滚动）
+
+服务日志默认只输出到 stderr（`docker compose logs` 可看）。如需落到宿主机本地文件：
+
+1. **目录权限**（容器以 uid=1000 运行，先让挂载目录可写）：
+
+   ```bash
+   mkdir -p logs && sudo chown -R 1000:1000 logs
+   ```
+
+2. compose 已配置 `MCP_LOG_FILE_DIR=/app/logs` 并挂载 `./logs:/app/logs`，直接重启即可：
+
+   ```bash
+   docker compose up -d --force-recreate
+   ```
+
+日志文件行为：
+
+- 当天文件：`logs/vision-bridge.log`；
+- 每天 0 点自动滚动为 `logs/vision-bridge.log.YYYY-MM-DD`（按日期命名），保留 30 天；
+- 目录不可写时服务**不会崩溃**，仅告警并继续用 stderr 输出；
+- 裸跑（非 Docker）同样支持：设 `MCP_LOG_FILE_DIR=/绝对路径/日志目录` 即可；
+- 想只保留错误/警告，把 `MCP_LOG_LEVEL` 设为 `WARNING` 或 `ERROR`（stderr 与文件同级别）。
+
+### 容器内调试（curl / ping / 安装工具）
+
+镜像已内置常用网络调试工具，**无需安装**即可用：
+
+```bash
+docker exec -it vision-bridge bash     # 进入容器（用户 vision）
+curl -v http://host.docker.internal:8001/v1/models
+ping -c 2 host.docker.internal
+dig +short example.com
+nc -zv host.docker.internal 8001
+ps aux
+```
+
+需要额外工具时有两种方式：
+
+```bash
+# 方式一：容器内用 sudo 临时安装（NOPASSWD 已配好）
+docker exec -it vision-bridge bash
+sudo apt-get update && sudo apt-get install -y <包名>
+
+# 方式二：宿主机直接进 root shell（不改镜像）
+docker exec -u 0 -it vision-bridge bash
+```
+
+> **注意**：容器内安装的东西在容器重建（`docker compose up -d --build` / `down` 后 `up`）
+> 后会丢失。长期需要的工具请加进 `Dockerfile` 的 `apt-get install` 列表里。
+
 ### 常见问题
 
 - **容器启动即退出**：`VISION_BACKEND=third_party` 但未配置
@@ -356,6 +407,28 @@ docker compose up -d   # 之后在 .env 中设置 VISION_BACKEND=paddleocr
   「语法解析器」镜像，在内网 / 离线 / 私有镜像源环境下会拉取失败。本 Dockerfile
   未用到任何新版语法特性，删除该行后即可用内置解析器正常构建；若内网用镜像代理，
   也可改为 `# syntax=docker/dockerfile:1@sha256:<内网可用的摘要>` 或直接用代理地址。
+- **构建时连不上 docker.io（`failed to resolve source metadata` / `connection reset by peer`）**：
+  这是宿主机网络无法访问 docker.io（内网 / 被墙 / 运营商拦截），与项目无关。三种解法：
+  1. **配置镜像加速**：编辑 `/etc/docker/daemon.json` 加入 `registry-mirrors`
+     （如 `https://docker.m.daocloud.io`，或用你云厂商的加速器地址），重启 docker 后重试；
+     若 `docker compose build` 仍不走加速（部分版本 BuildKit 不读 daemon.json），改用
+     `docker buildx create --driver docker-container --config buildkitd.toml --use`
+     并为该 builder 配置 mirror；
+  2. **换内网基础镜像**：把 Dockerfile 中两处 `FROM python:3.12-slim` 改为内网
+     registry 里已有的 python 镜像路径；
+  3. **pip 源同步换镜像**：`.env` 里设 `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+     （Dockerfile / compose 已支持该构建参数），否则基础镜像拉取成功后，
+     pip 安装依赖时仍会因 PyPI 不通而失败。
+- **curl 正常、但 docker 构建报 `connection reset by peer`（疑似「docker 网络被拦截」）**：
+  先看 curl 输出的第一行——若是 `HTTP/1.1 200 Connection established`，说明 curl 走的是
+  **HTTP 代理**（`http_proxy` / `https_proxy`），而 Docker 守护进程不读 shell 环境变量、
+  是直连 registry，于是被网络重置。解决：把代理配给 docker——
+  1. `env | grep -i proxy` 查出代理地址；
+  2. 写入 `/etc/systemd/system/docker.service.d/http-proxy.conf`（`Environment="HTTP_PROXY=..."` /
+     `"HTTPS_PROXY=..."` / `"NO_PROXY=localhost,127.0.0.1,host.docker.internal"`），
+     然后 `systemctl daemon-reload && systemctl restart docker`；
+  3. 可选：在 `~/.docker/config.json` 的 `proxies.default` 里也配一份。
+  BuildKit 会把代理环境变量自动传给构建容器内的 `RUN`（pip / apt 同样走代理）。
 
 ---
 
@@ -623,6 +696,7 @@ vision-bridge-mcp-server --transport http --port 8081 \
 | MCP_AUTH_MODE | str | 否 | none | HTTP 认证模式（none / token） |
 | MCP_SERVER_TOKEN | str | 否 | - | HTTP 客户端认证 Token |
 | MCP_LOG_LEVEL | str | 否 | INFO | 日志级别 |
+| MCP_LOG_FILE_DIR | str | 否 | -（Docker: /app/logs） | 日志文件目录；留空不写文件。按日期滚动：当天 `vision-bridge.log`，每天 0 点滚动为 `vision-bridge.log.YYYY-MM-DD`，保留 30 天 |
 
 ---
 

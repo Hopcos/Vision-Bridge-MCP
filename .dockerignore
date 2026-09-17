@@ -29,9 +29,10 @@ coverage.xml
 .ruff_cache/
 .tox/
 
-# 本地模型 / 字体（体积大；字体请用 compose 卷挂载，见 README「Docker 部署」）
+# 本地模型 / 字体 / 日志（体积大；字体与日志用 compose 卷挂载，见 README「Docker 部署」）
 .models/
 fonts/
+logs/
 
 # IDE / 日志
 .idea/

@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from .config import get_settings
 from .server import create_server
 
 # Windows 控制台默认 cp1252 无法编码中文帮助文本：强制 UTF-8 输出。
@@ -42,20 +44,49 @@ app = typer.Typer(
 
 
 def _configure_logging(level: str) -> None:
-    """配置 stderr 日志（stdio 下 stdout 保持干净）。"""
+    """配置日志：stderr（stdio 下 stdout 保持干净）。
+
+    若设置了 ``MCP_LOG_FILE_DIR``，同时把日志按日期滚动写入文件：
+    当天为 ``vision-bridge.log``，每天 0 点滚动为 ``vision-bridge.log.YYYY-MM-DD``，
+    保留 30 天。目录不可写时仅告警、不阻断启动。
+    """
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     root = logging.getLogger()
     root.setLevel((level or "INFO").upper())
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-            datefmt="%H:%M:%S",
-        )
-    )
-    root.addHandler(handler)
-    # 只保留一条 handler（避免重复）
-    for h in list(root.handlers)[:-1]:
+    # 清空旧 handler，避免重复添加（测试 / 多次调用场景）
+    for h in list(root.handlers):
         root.removeHandler(h)
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(formatter)
+    root.addHandler(stderr_handler)
+
+    log_dir = (get_settings().mcp_log_file_dir or "").strip()
+    if log_dir:
+        try:
+            from logging.handlers import TimedRotatingFileHandler
+
+            log_path = Path(log_dir) / "vision-bridge.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = TimedRotatingFileHandler(
+                log_path,
+                when="midnight",
+                backupCount=30,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+            logging.getLogger(__name__).info(
+                "文件日志已开启（按日期滚动）: %s", log_path
+            )
+        except Exception as e:  # noqa: BLE001  # 文件不可写等场景不阻断启动
+            logging.getLogger(__name__).warning(
+                "文件日志开启失败（不影响运行）: %s", e
+            )
 
 
 @app.callback(invoke_without_command=True, result_callback=None)

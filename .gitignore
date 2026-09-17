@@ -33,6 +33,9 @@ coverage.xml
 # Docker 部署时挂载的中文字体（见 docker-compose.yml 的 volumes）
 fonts/
 
+# Docker 部署时挂载的日志目录（见 docker-compose.yml 的 volumes）
+logs/
+
 # IDE
 .idea/
 .vscode/

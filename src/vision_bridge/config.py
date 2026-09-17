@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     mcp_auth_mode: Literal["none", "token"] = "none"
     mcp_server_token: str | None = None
     mcp_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # 日志文件目录（Docker 部署默认 /app/logs；留空 = 不写文件日志，仅 stderr）。
+    # 文件按日期滚动：当天 vision-bridge.log，每天 0 点滚动为 vision-bridge.log.YYYY-MM-DD，保留 30 天。
+    mcp_log_file_dir: str = ""
 
     @field_validator("vision_backend")
     @classmethod
