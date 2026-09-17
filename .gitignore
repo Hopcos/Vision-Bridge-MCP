@@ -30,6 +30,9 @@ coverage.xml
 # 本地模型文件（下载的 embedding / OCR 模型，体积大）
 .models/
 
+# Docker 部署时挂载的中文字体（见 docker-compose.yml 的 volumes）
+fonts/
+
 # IDE
 .idea/
 .vscode/

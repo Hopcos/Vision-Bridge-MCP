@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# 环境与密钥（.env.example 仅作文档保留，不打进镜像）
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# 测试与覆盖率
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# 工具缓存
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# 本地模型 / 字体（体积大；字体请用 compose 卷挂载，见 README「Docker 部署」）
+.models/
+fonts/
+
+# IDE / 日志
+.idea/
+.vscode/
+*.swp
+*.swo
+*.log

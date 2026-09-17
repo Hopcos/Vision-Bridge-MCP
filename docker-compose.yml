@@ -1,11 +1,55 @@
+# ---------------------------------------------------------------------------
+# Vision Bridge MCP Server — Docker Compose 部署
+#
+# 使用方式：
+#   1. 复制 .env.example 为 .env 并配置视觉后端（推荐第三方云端视觉模型）：
+#        cp .env.example .env
+#   2. 构建并启动：
+#        docker compose up -d --build
+#   3. 验证：
+#        curl http://localhost:8081/health        # 期望 {"ok": true, ...}
+#
+# 说明：
+#   - compose 自动读取同目录 .env 做变量插值（${VAR:-default}），未配置的变量
+#     使用右侧默认值。
+#   - 容器内不能直接用 localhost 访问宿主机服务：访问宿主机上的本地视觉模型请用
+#     http://host.docker.internal:8001/v1（下方 extra_hosts 已配置 host-gateway）。
+#     .env.example 里的 localhost 值只对宿主机裸跑有效，容器部署需改为
+#     host.docker.internal（详见 README「Docker 部署」）。
+#   - MCP_HOST / MCP_PORT / MCP_AUTH_MODE / MCP_SERVER_TOKEN / MCP_LOG_LEVEL
+#     通过 command 传给 CLI，因此改 .env 后 docker compose up -d 即生效。
+#   - 中文字体：把字体文件放入 ./fonts（如 Noto Sans CJK .ttf），自动挂载到容器内
+#     $HOME/.fonts（uid 1000 的家目录），供文字渲染 / OCR 使用。
+#   - 健康检查继承自 Dockerfile（/health + 后端就绪状态），无需在此重复声明。
+# ---------------------------------------------------------------------------
 services:
   vision-bridge-mcp-server:
-    build: .
+    build:
+      context: .
+      args:
+        # pip 安装的 extras；默认已含 tesseract(pytesseract)；
+        # 需要 PaddleOCR 时改为 all 或 paddleocr（镜像体积显著增大）
+        PIP_EXTRAS: ${PIP_EXTRAS:-mcp-http,tesseract}
     image: vision-bridge-mcp-server:latest
     container_name: vision-bridge
     restart: unless-stopped
+    init: true
     ports:
-      - "8081:8081"
+      - "${MCP_PORT:-8081}:${MCP_PORT:-8081}"
+    command:
+      - vision-bridge-mcp-server
+      - --transport
+      - http
+      - --host
+      - ${MCP_HOST:-0.0.0.0}
+      - --port
+      - ${MCP_PORT:-8081}
+      - --auth-mode
+      - ${MCP_AUTH_MODE:-none}
+      - --server-token
+      - ${MCP_SERVER_TOKEN:-}
+      - --log-level
+      - ${MCP_LOG_LEVEL:-INFO}
     environment:
       # 视觉后端：third_party(默认) | local_api | paddleocr | tesseract | custom_api | auto
       VISION_BACKEND: ${VISION_BACKEND:-third_party}
@@ -13,7 +57,7 @@ services:
       VISION_THIRD_PARTY_API_BASE: ${VISION_THIRD_PARTY_API_BASE:-}
       VISION_THIRD_PARTY_API_KEY: ${VISION_THIRD_PARTY_API_KEY:-}
       VISION_THIRD_PARTY_MODEL_NAME: ${VISION_THIRD_PARTY_MODEL_NAME:-}
-      # 本地多模态模型（当访问宿主机部署的服务时使用）
+      # 本地多模态模型（容器内访问宿主机请用 host.docker.internal）
       VISION_API_BASE: ${VISION_API_BASE:-http://host.docker.internal:8001/v1}
       VISION_API_KEY: ${VISION_API_KEY:-any}
       VISION_MODEL_NAME: ${VISION_MODEL_NAME:-Qwen2-VL-7B}
@@ -23,24 +67,31 @@ services:
       VISION_OCR_LANG: ${VISION_OCR_LANG:-ch}
       VISION_OCR_USE_GPU: ${VISION_OCR_USE_GPU:-false}
       VISION_TESSERACT_LANG: ${VISION_TESSERACT_LANG:-chi_sim+eng}
+      VISION_TESSERACT_CMD: ${VISION_TESSERACT_CMD:-tesseract}
       # 自定义 API 后端
       VISION_CUSTOM_API_URL: ${VISION_CUSTOM_API_URL:-}
-      # MCP Server 配置
+      VISION_CUSTOM_API_METHOD: ${VISION_CUSTOM_API_METHOD:-POST}
+      VISION_CUSTOM_API_TIMEOUT: ${VISION_CUSTOM_API_TIMEOUT:-30}
+      # 图片处理与并发
+      VISION_MAX_IMAGE_SIZE: ${VISION_MAX_IMAGE_SIZE:-20971520}
+      VISION_MAX_CONCURRENT: ${VISION_MAX_CONCURRENT:-3}
+      VISION_COMPRESS_TARGET_KB: ${VISION_COMPRESS_TARGET_KB:-0}
+      VISION_COMPRESS_MIN_QUALITY: ${VISION_COMPRESS_MIN_QUALITY:-40}
+      # HTTP 图片下载授权（Atlassian / Jira / Confluence 附件等）
+      VISION_HTTP_DOWNLOAD_TOKEN: ${VISION_HTTP_DOWNLOAD_TOKEN:-}
+      VISION_HTTP_DOWNLOAD_TOKEN_TYPE: ${VISION_HTTP_DOWNLOAD_TOKEN_TYPE:-bearer}
+      VISION_ATLASSIAN_USER: ${VISION_ATLASSIAN_USER:-}
+      VISION_HTTP_DOWNLOAD_HEADERS: ${VISION_HTTP_DOWNLOAD_HEADERS:-}
+      # MCP Server 配置（host / port / 认证经 command 传给 CLI，保证 .env 生效）
       MCP_TRANSPORT: http
-      MCP_HOST: 0.0.0.0
-      MCP_PORT: 8081
+      MCP_HOST: ${MCP_HOST:-0.0.0.0}
+      MCP_PORT: ${MCP_PORT:-8081}
       MCP_AUTH_MODE: ${MCP_AUTH_MODE:-none}
       MCP_SERVER_TOKEN: ${MCP_SERVER_TOKEN:-}
       MCP_LOG_LEVEL: ${MCP_LOG_LEVEL:-INFO}
     volumes:
-      # 需要时挂载中文字体（OCR / 视觉模型文字渲染）
-      - ./fonts:/root/.fonts:ro
-    # 健康检查：依赖 MCP SDK 探测服务是否就绪，可替换为 /health
-    # healthcheck:
-    #   test: ["CMD", "curl", "-sf", "http://localhost:8081/health"]
-    #   interval: 30s
-    #   timeout: 5s
-    #   retries: 3
+      # 需要时挂载中文字体（OCR / 视觉模型文字渲染），目录不存在时 Docker 会自动创建
+      - ./fonts:/home/vision/.fonts:ro
     extra_hosts:
-      # 让容器内访问宿主机的本地视觉模型 API
+      # 让容器内访问宿主机的本地视觉模型 API（macOS / Windows 自带，Linux 需要此项）
       - "host.docker.internal:host-gateway"

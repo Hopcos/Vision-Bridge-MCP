@@ -4,6 +4,28 @@
 
 **用户完全无感，强模型仿佛多了双眼睛。**
 
+## 目录
+
+- [工作原理](#工作原理)
+- [适用场景](#适用场景)
+- [核心特性](#核心特性)
+- [MCP Tools 总览](#mcp-tools-总览)
+- [MCP Resources](#mcp-resources)
+- [MCP Prompts](#mcp-prompts)
+- [前置条件](#前置条件)
+- [安装](#安装)
+- [Docker 部署](#docker-部署)
+- [本地打包 / 发布](#本地打包-发布)
+- [快速开始](#快速开始)
+- [配合纯文本强模型的完整配置示例](#配合纯文本强模型的完整配置示例)
+- [环境变量参考](#环境变量参考)
+- [CLI 参考](#cli-参考)
+- [工具参考](#工具参考)
+- [故障排除](#故障排除)
+- [开发指南](#开发指南)
+- [安全合规](#安全合规)
+- [License](#license)
+
 ## 工作原理
 
 ```
@@ -76,7 +98,7 @@
 
 ## 前置条件
 
-- **Python 3.11+**
+- **Python 3.11+**（或直接使用 Docker 部署，无需本机安装 Python，见 [Docker 部署](#docker-部署)）
 - **至少一个视觉后端**：
   - 最简单：一个第三方云端 Endpoint + API Key（无需本地部署模型，推荐）
   - 或本地多模态模型 / PaddleOCR / Tesseract
@@ -134,6 +156,9 @@ pip install 'vision-bridge-mcp-server[tesseract]'
 ## 安装
 
 ```bash
+# Docker（无需本机 Python 环境，推荐用于团队共享 / 远程部署，见「Docker 部署」）
+docker compose up -d --build
+
 # pip
 pip install vision-bridge-mcp-server
 
@@ -153,6 +178,179 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -e ".[all]"
 ```
+
+---
+
+## Docker 部署
+
+仓库自带 4 个部署相关文件：
+
+| 文件 | 说明 |
+| --- | --- |
+| `Dockerfile` | 多阶段构建；默认内置 MCP HTTP 传输 + Tesseract OCR（含中/英文语言包 + pytesseract），不内置任何视觉模型；支持 `--build-arg PIP_EXTRAS=all` 加入 PaddleOCR |
+| `docker-compose.yml` | 一键编排：端口映射、全部 `VISION_*` / `MCP_*` 环境变量透传、中文字体挂载、`host.docker.internal` 访问宿主机视觉模型 |
+| `.dockerignore` | 构建上下文排除（`.git` / `.env` / 测试 / 缓存 / 本地模型等，避免大体积上下文拖慢构建） |
+| `docker/healthcheck.py` | 容器健康检查脚本：访问 `/health` 校验进程存活 + 后端就绪；token 认证模式下自动携带 Bearer Token，无需 curl |
+
+> Docker 部署默认以 **HTTP 传输模式** 运行（供 MCP 客户端远程连接）；单机本地使用
+> 无需 Docker，直接用 pip 安装 + stdio 即可。
+
+### 方式一：docker compose（推荐）
+
+#### 1. 生成 `.env`（从 `.env.example` 起步）
+
+```bash
+cp .env.example .env
+```
+
+#### 2. 编辑 `.env`：配置视觉后端与 MCP 服务
+
+以「阿里云百炼 DashScope + token 认证」为例（完整变量见文末「环境变量参考」）：
+
+```dotenv
+# ---- 视觉后端：third_party（默认，只需 Endpoint + Key + 模型名）----
+VISION_BACKEND=third_party
+VISION_THIRD_PARTY_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+VISION_THIRD_PARTY_API_KEY=sk-你的真实Key
+VISION_THIRD_PARTY_MODEL_NAME=qwen-vl-max
+
+# ---- MCP 服务（容器内 MCP_HOST 必须是 0.0.0.0，不能是 127.0.0.1）----
+MCP_TRANSPORT=http
+MCP_HOST=0.0.0.0
+MCP_PORT=8081
+MCP_AUTH_MODE=token
+MCP_SERVER_TOKEN=换成一段足够长的随机串
+MCP_LOG_LEVEL=INFO
+
+# ---- 其他后端示例（按需取消注释，并把 VISION_BACKEND 改成对应值）----
+# VISION_BACKEND=local_api                      # 访问宿主机上的本地多模态模型
+# VISION_API_BASE=http://host.docker.internal:8001/v1   # 容器内必须用 host.docker.internal
+# VISION_API_KEY=any
+# VISION_MODEL_NAME=Qwen2-VL-7B
+
+# VISION_BACKEND=tesseract                      # 镜像已内置，零配置即可用
+# VISION_TESSERACT_LANG=chi_sim+eng
+```
+
+> 切换后端只需改 `VISION_BACKEND` 与对应变量，然后重新 `docker compose up -d`
+> 即可，**无需重建镜像**（PaddleOCR 除外，需先 `docker compose build --build-arg PIP_EXTRAS=all`）。
+
+#### 3. 构建并启动
+
+```bash
+docker compose up -d --build
+docker compose ps          # 查看状态（含健康检查）
+
+# 验证（token 认证模式需带 Authorization 头）
+curl http://localhost:8081/health -H "Authorization: Bearer <MCP_SERVER_TOKEN>"
+# 期望输出：{"ok": true, "status": "...", "active_backend": "third_party (qwen-vl-max)"}
+```
+
+#### 4. 常用操作
+
+| 操作 | 命令 |
+| --- | --- |
+| 查看实时日志 | `docker compose logs -f` |
+| 修改 `.env` 后重启 | `docker compose up -d --force-recreate` |
+| 停止服务 | `docker compose down` |
+| 换 PaddleOCR 后端（需带参数重建后重启） | `docker compose build --build-arg PIP_EXTRAS=all && docker compose up -d` |
+
+MCP 客户端连接（Streamable HTTP）：
+
+```json
+{
+  "mcpServers": {
+    "vision": {
+      "url": "http://<服务器IP>:8081/mcp",
+      "headers": { "Authorization": "Bearer <MCP_SERVER_TOKEN>" }
+    }
+  }
+}
+```
+
+（旧版 SSE 客户端使用 `http://<服务器IP>:8081/sse`；未开启 token 认证时省略 `headers`。）
+
+> **容器内 localhost 陷阱**：`.env.example` 里的 `MCP_HOST=127.0.0.1` 与
+> `VISION_API_BASE=http://localhost:8001/v1` 只对宿主机裸跑有效，容器部署时必须调整：
+> - `MCP_HOST` 设为 `0.0.0.0`（否则容器只监听回环地址，宿主机的端口映射无法访问到服务）；
+> - 用 `local_api` 访问宿主机上的本地视觉模型时，`VISION_API_BASE` 写成
+>   `http://host.docker.internal:8001/v1`（compose 已配置
+>   `extra_hosts: host.docker.internal:host-gateway`）。
+
+### 方式二：docker run
+
+```bash
+docker build -t vision-bridge-mcp-server .
+
+# 第三方云端视觉模型（默认后端）示例
+docker run -d --name vision-bridge -p 8081:8081 \
+  -e VISION_BACKEND=third_party \
+  -e VISION_THIRD_PARTY_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1 \
+  -e VISION_THIRD_PARTY_API_KEY=sk-xxx \
+  -e VISION_THIRD_PARTY_MODEL_NAME=qwen-vl-max \
+  --add-host host.docker.internal:host-gateway \
+  vision-bridge-mcp-server
+
+# 本地 Tesseract OCR（镜像已内置，零配置即可用）
+docker run -d --name vision-bridge-ocr -p 8082:8081 \
+  -e VISION_BACKEND=tesseract \
+  vision-bridge-mcp-server
+```
+
+> `docker run` 的环境变量与上面 `.env` 完全一致，用 `-e 变量=值` 传入即可，完整清单见
+> 文末「环境变量参考」。`MCP_HOST` / `MCP_PORT` / `MCP_AUTH_MODE` / `MCP_SERVER_TOKEN` /
+> `MCP_LOG_LEVEL` 会被镜像的启动命令自动读取——例如改端口：
+> `-p 9090:9090 -e MCP_PORT=9090`；开认证：`-e MCP_AUTH_MODE=token -e MCP_SERVER_TOKEN=xxx`。
+
+### 常见后端配置
+
+| 后端 | 说明 |
+| --- | --- |
+| `third_party`（默认） | 配置 `VISION_THIRD_PARTY_API_BASE` / `_API_KEY` / `_MODEL_NAME` 即可，见上方示例 |
+| `local_api` | `VISION_BACKEND=local_api` + `VISION_API_BASE=http://host.docker.internal:8001/v1` + `VISION_MODEL_NAME` |
+| `tesseract` | 镜像已内置系统 tesseract + 中/英文语言包 + pytesseract，`VISION_BACKEND=tesseract` 直接可用 |
+| `paddleocr` | 未默认安装（paddlepaddle 体积大），需重新构建，见下方 |
+| `custom_api` | 配置 `VISION_CUSTOM_API_URL` 即可 |
+
+**PaddleOCR 需要重新构建镜像**（构建参数 `PIP_EXTRAS` 决定 pip 安装的 extras，默认 `mcp-http,tesseract`）：
+
+```bash
+docker compose build --build-arg PIP_EXTRAS=all
+# 或：docker build --build-arg PIP_EXTRAS=all -t vision-bridge-mcp-server .
+docker compose up -d   # 之后在 .env 中设置 VISION_BACKEND=paddleocr
+```
+
+> 注意：`PIP_EXTRAS=all` 会安装 `paddlepaddle`（数百 MB），且要求其提供与
+> 基础镜像 Python 3.12 匹配的 wheel；如安装失败，可检查 paddlepaddle 版本或改用
+> `PIP_EXTRAS=paddleocr` 固定版本。
+
+### 认证与健康检查
+
+- **认证**：设 `MCP_AUTH_MODE=token` + `MCP_SERVER_TOKEN=xxx`（`.env` 中）后，
+  `/mcp` 与 `/health` 都需要 `Authorization: Bearer xxx`。compose 已把这两个变量
+  通过 `command` 传给 CLI，因此修改 `.env` 后 `docker compose up -d` 即生效。
+- **健康检查**：镜像内置 `HEALTHCHECK`（`GET /health`），进程存活且后端
+  `ok==true` 才算 healthy；token 模式下自动携带 Bearer，无需额外配置。
+- **端口**：compose 按 `${MCP_PORT:-8081}` 同步 host / 容器 / 健康检查端口，改
+  `.env` 中的 `MCP_PORT` 即可整体迁移。
+
+### 中文字体
+
+需要文字渲染（如用 PIL 生成含中文的测试图）时，把字体文件放入仓库根目录 `fonts/`
+（如 Noto Sans CJK / 思源黑体的 `.ttf` / `.otf`），compose 会自动挂载到容器内
+`/home/vision/.fonts`（镜像以非 root 用户 uid=1000 运行，家目录即 `/home/vision`）。
+
+### 常见问题
+
+- **容器启动即退出**：`VISION_BACKEND=third_party` 但未配置
+  `VISION_THIRD_PARTY_API_BASE` / `_API_KEY` / `_MODEL_NAME` 时，Server 会因
+  配置校验失败而退出（日志会明确指出缺少的变量）；补齐配置或改用其他后端即可。
+- **修改 `.env` 后不生效**：compose 在 `docker compose up` 时解析变量；改完
+  `.env` 需重新执行 `docker compose up -d`（必要时加 `--force-recreate`）。
+- **容器内无法访问宿主机模型**：确认使用 `host.docker.internal` 且 compose 的
+  `extra_hosts` 存在；`docker run` 需自行加 `--add-host host.docker.internal:host-gateway`。
+- **`MCP_AUTH_MODE=token` 但未设置 `MCP_SERVER_TOKEN`**：CLI 会因缺少 Token 启动失败，
+  这是有意为之的显式报错，设置 Token 后重启即可。
 
 ---
 
@@ -338,6 +536,8 @@ Line: 42 + 58 = 100
 vision-bridge-mcp-server --transport http --port 8081 \
   --auth-mode token --server-token your-secret
 ```
+
+> 远程/团队共享部署推荐直接用 [Docker 部署](#docker-部署)，无需手动安装 Python 与依赖。
 
 客户端连接：
 
