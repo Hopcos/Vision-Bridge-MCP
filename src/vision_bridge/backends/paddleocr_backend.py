@@ -29,6 +29,7 @@ class PaddleOCRBackend(VisionBackend):
 
     name = "paddleocr"
     _predictor: Any = None  # 惰性单例
+    _predictor_error: str | None = None  # 初始化失败后缓存错误，避免对 PDX 反复重试（见 _load_predictor）
     _predictor_lock = threading.Lock()  # 首次初始化并发保护（PaddleX 只允许初始化一次）
 
     def __init__(self, settings: Settings) -> None:
@@ -46,24 +47,35 @@ class PaddleOCRBackend(VisionBackend):
     def _load_predictor(self) -> Any:
         """惰性加载 PaddleOCR 实例（首次调用下载模型，可能较久）。
 
-        必须加锁：PaddleOCR 3.x 底层 PaddleX(PDX) 在同一进程内只允许初始化一次，
-        重复初始化会抛 ``PDX has already been initialized``。并发场景（如批量
-        batch_describe_images 同时处理多张图，或健康检查与识别同时触发）下，
-        多个线程可能同时通过单例检查并各自执行 ``PaddleOCR()`` —— 这里用
-        进程级锁 + 双重检查保证只有一个线程真正初始化。
+        两道防线，缺一不可：
+        1. 进程级锁 + 双重检查：PaddleX(PDX) 在同一进程内只允许初始化一次，
+           并发场景（批量多图 / 健康检查与识别同时触发）下多个线程可能同时
+           通过单例检查并各自执行 ``PaddleOCR()``，必须保证只有一个线程初始化；
+        2. 失败缓存：若首次初始化**部分失败**（如模型下载超时 —— PDX 可能已经
+           初始化成功、但 ``PaddleOCR()`` 构造报错），``_predictor`` 仍为 None，
+           下次调用会再次构造 ``PaddleOCR()``，此时 PDX 已初始化 → 抛
+           ``PDX has already been initialized``，之后每次都死循环在同一条错上。
+           因此首次失败后将错误缓存，后续调用直接报同一错误并提示重启进程，
+           不再触碰 PDX（PDX 不提供反初始化，进程内无法恢复）。
         """
+        if PaddleOCRBackend._predictor_error is not None:
+            raise BackendUnavailableError(PaddleOCRBackend._predictor_error)
         if PaddleOCRBackend._predictor is not None:
             return PaddleOCRBackend._predictor
         with PaddleOCRBackend._predictor_lock:
-            # 双重检查：等待锁期间可能已被其它线程初始化完成
+            # 双重检查：等待锁期间可能已被其它线程初始化 / 失败缓存
+            if PaddleOCRBackend._predictor_error is not None:
+                raise BackendUnavailableError(PaddleOCRBackend._predictor_error)
             if PaddleOCRBackend._predictor is not None:
                 return PaddleOCRBackend._predictor
             if _paddleocr_importable() is False:
-                raise BackendUnavailableError(
+                err = (
                     "PaddleOCR 未安装。请执行: "
                     "pip install 'vision-bridge-mcp-server[paddleocr]' "
                     "或 pip install paddleocr paddlepaddle"
                 )
+                PaddleOCRBackend._predictor_error = err
+                raise BackendUnavailableError(err)
             try:
                 # PaddlePaddle >= 3.x 的 PIR 执行器 + oneDNN(MKLDNN) 在 PP-OCR/NLP
                 # 部分模型上有已知崩溃（ConvertPirAttribute2RuntimeAttribute 失败）。
@@ -88,9 +100,19 @@ class PaddleOCRBackend(VisionBackend):
                 logger.info("加载 PaddleOCR(lang=%s, gpu=%s) ...", self.lang, self.use_gpu)
                 ocr = PaddleOCR(**params)
             except ImportError as e:
-                raise BackendUnavailableError("PaddleOCR 未安装。") from e
+                err = "PaddleOCR 未安装。"
+                PaddleOCRBackend._predictor_error = err
+                raise BackendUnavailableError(err) from e
             except Exception as e:
-                raise BackendUnavailableError(f"PaddleOCR 初始化失败: {e}") from e
+                msg = str(e)
+                if "already been initialized" in msg.lower():
+                    msg += (
+                        "（PaddleX 在同一进程内只能初始化一次；若此前初始化失败或被"
+                        "同进程其它组件占用，进程内无法恢复，请重启服务进程/容器后重试）"
+                    )
+                err = f"PaddleOCR 初始化失败: {msg}"
+                PaddleOCRBackend._predictor_error = err
+                raise BackendUnavailableError(err) from e
             PaddleOCRBackend._predictor = ocr
             return ocr
 

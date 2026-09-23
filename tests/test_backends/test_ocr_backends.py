@@ -95,14 +95,54 @@ class TestPaddleOCR:
         fake_module.PaddleOCR = FakePaddleOCR
         monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
         monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_importable", lambda: True)
-        # 重置类级单例，保证本测试从"未初始化"状态开始（测试结束时自动恢复）
+        # 重置类级单例与失败缓存，保证从"未初始化"状态开始（测试结束时自动恢复）
         monkeypatch.setattr(PaddleOCRBackend, "_predictor", None)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor_error", None)
 
         b = PaddleOCRBackend(_paddle_settings())
         results = await asyncio.gather(*[asyncio.to_thread(b._load_predictor) for _ in range(6)])
 
         assert len(init_calls) == 1, f"PaddleOCR() 被初始化了 {len(init_calls)} 次"
         assert all(r is results[0] for r in results)
+
+    @pytest.mark.asyncio
+    async def test_load_predictor_failure_cached_no_retry(self, monkeypatch):
+        """首次初始化失败后必须缓存错误、不再重试 PaddleOCR()。
+
+        回归：首次初始化"部分失败"（PDX 已初始化但 PaddleOCR() 构造报错）后，
+        _predictor 仍为 None；若下一次调用再次构造 PaddleOCR()，会撞上
+        ``PDX has already been initialized`` 并永久死循环。必须 fail-fast。
+        """
+        import sys
+        import types
+
+        init_calls: list[dict] = []
+
+        class FakePaddleOCR:
+            def __init__(self, **params):
+                init_calls.append(params)
+                raise RuntimeError("PDX has already been initialized. Reinitialization is not supported.")
+
+        fake_module = types.ModuleType("paddleocr")
+        fake_module.PaddleOCR = FakePaddleOCR
+        monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+        monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_importable", lambda: True)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor", None)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor_error", None)
+
+        b = PaddleOCRBackend(_paddle_settings())
+
+        # 第一次：初始化失败，抛 BackendUnavailableError 且带重启提示
+        with pytest.raises(BackendUnavailableError) as exc1:
+            b._load_predictor()
+        assert "PDX has already been initialized" in str(exc1.value)
+        assert "重启" in str(exc1.value)
+
+        # 第二次及以后：不再构造 PaddleOCR()，直接抛缓存错误
+        with pytest.raises(BackendUnavailableError) as exc2:
+            await asyncio.to_thread(b._load_predictor)
+        assert str(exc2.value) == str(exc1.value)
+        assert len(init_calls) == 1, f"失败后仍重试了 {len(init_calls)} 次"
 
     def test_extract_text_forms(self):
         # ComposeResult 简单形态：[box, text, score]
