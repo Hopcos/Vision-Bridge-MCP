@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from vision_bridge.backends.paddleocr_backend import PaddleOCRBackend, _extract_page, _extract_text
@@ -65,6 +67,42 @@ class TestPaddleOCR:
         b = PaddleOCRBackend(_paddle_settings())
         text = await b.describe_image(b"\x00", "", "raw_text")
         assert "Hello" in text and "World" in text
+
+    @pytest.mark.asyncio
+    async def test_load_predictor_concurrent_initializes_once(self, monkeypatch):
+        """并发首次初始化必须只执行一次。
+
+        回归：PaddleX(PDX) 同一进程只允许初始化一次；此前 _load_predictor 无锁，
+        并发请求（如 batch 多图同时触发）会竞态，导致第二个线程抛
+        ``PDX has already been initialized``。
+        """
+        import sys
+        import time
+        import types
+
+        init_calls: list[dict] = []
+
+        class FakeOCR:
+            def predict(self, path, *a, **k):
+                return []
+
+        class FakePaddleOCR:
+            def __init__(self, **params):
+                init_calls.append(params)
+                time.sleep(0.05)  # 放大竞态窗口：让多个线程都挤到初始化点
+
+        fake_module = types.ModuleType("paddleocr")
+        fake_module.PaddleOCR = FakePaddleOCR
+        monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+        monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_importable", lambda: True)
+        # 重置类级单例，保证本测试从"未初始化"状态开始（测试结束时自动恢复）
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor", None)
+
+        b = PaddleOCRBackend(_paddle_settings())
+        results = await asyncio.gather(*[asyncio.to_thread(b._load_predictor) for _ in range(6)])
+
+        assert len(init_calls) == 1, f"PaddleOCR() 被初始化了 {len(init_calls)} 次"
+        assert all(r is results[0] for r in results)
 
     def test_extract_text_forms(self):
         # ComposeResult 简单形态：[box, text, score]

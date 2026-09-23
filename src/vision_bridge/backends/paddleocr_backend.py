@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -28,6 +29,7 @@ class PaddleOCRBackend(VisionBackend):
 
     name = "paddleocr"
     _predictor: Any = None  # 惰性单例
+    _predictor_lock = threading.Lock()  # 首次初始化并发保护（PaddleX 只允许初始化一次）
 
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
@@ -42,44 +44,55 @@ class PaddleOCRBackend(VisionBackend):
         return level == "raw_text"
 
     def _load_predictor(self) -> Any:
-        """惰性加载 PaddleOCR 实例（首次调用下载模型，可能较久）。"""
+        """惰性加载 PaddleOCR 实例（首次调用下载模型，可能较久）。
+
+        必须加锁：PaddleOCR 3.x 底层 PaddleX(PDX) 在同一进程内只允许初始化一次，
+        重复初始化会抛 ``PDX has already been initialized``。并发场景（如批量
+        batch_describe_images 同时处理多张图，或健康检查与识别同时触发）下，
+        多个线程可能同时通过单例检查并各自执行 ``PaddleOCR()`` —— 这里用
+        进程级锁 + 双重检查保证只有一个线程真正初始化。
+        """
         if PaddleOCRBackend._predictor is not None:
             return PaddleOCRBackend._predictor
-        if _paddleocr_importable() is False:
-            raise BackendUnavailableError(
-                "PaddleOCR 未安装。请执行: "
-                "pip install 'vision-bridge-mcp-server[paddleocr]' "
-                "或 pip install paddleocr paddlepaddle"
-            )
-        try:
-            # PaddlePaddle >= 3.x 的 PIR 执行器 + oneDNN(MKLDNN) 在 PP-OCR/NLP
-            # 部分模型上有已知崩溃（ConvertPirAttribute2RuntimeAttribute 失败）。
-            # PaddleX 默认在 CPU 上开启 mkldnn（PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=true），
-            # 这里在导入前将其关闭；用户显式设置的原样保留。
-            if os.environ.get("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT") is None:
-                os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+        with PaddleOCRBackend._predictor_lock:
+            # 双重检查：等待锁期间可能已被其它线程初始化完成
+            if PaddleOCRBackend._predictor is not None:
+                return PaddleOCRBackend._predictor
+            if _paddleocr_importable() is False:
+                raise BackendUnavailableError(
+                    "PaddleOCR 未安装。请执行: "
+                    "pip install 'vision-bridge-mcp-server[paddleocr]' "
+                    "或 pip install paddleocr paddlepaddle"
+                )
+            try:
+                # PaddlePaddle >= 3.x 的 PIR 执行器 + oneDNN(MKLDNN) 在 PP-OCR/NLP
+                # 部分模型上有已知崩溃（ConvertPirAttribute2RuntimeAttribute 失败）。
+                # PaddleX 默认在 CPU 上开启 mkldnn（PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=true），
+                # 这里在导入前将其关闭；用户显式设置的原样保留。
+                if os.environ.get("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT") is None:
+                    os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
 
-            from paddleocr import PaddleOCR  # type: ignore[import-not-found]
+                from paddleocr import PaddleOCR  # type: ignore[import-not-found]
 
-            params: dict[str, Any] = {"lang": self.lang}
-            # PaddleOCR >= 3.x 移除了 use_angle_cls / use_gpu，改用 device 参数；
-            # 2.x 仍使用 use_angle_cls / use_gpu。按构造函数实际接受哪些参数来适配。
-            init_params = inspect.signature(PaddleOCR.__init__).parameters  # type: ignore[arg-type]
-            if "use_angle_cls" in init_params:
-                params["use_angle_cls"] = True
-            if self.use_gpu:
-                if "device" in init_params:
-                    params["device"] = "gpu:0"
-                elif "use_gpu" in init_params:
-                    params["use_gpu"] = True
-            logger.info("加载 PaddleOCR(lang=%s, gpu=%s) ...", self.lang, self.use_gpu)
-            ocr = PaddleOCR(**params)
-        except ImportError as e:
-            raise BackendUnavailableError("PaddleOCR 未安装。") from e
-        except Exception as e:
-            raise BackendUnavailableError(f"PaddleOCR 初始化失败: {e}") from e
-        PaddleOCRBackend._predictor = ocr
-        return ocr
+                params: dict[str, Any] = {"lang": self.lang}
+                # PaddleOCR >= 3.x 移除了 use_angle_cls / use_gpu，改用 device 参数；
+                # 2.x 仍使用 use_angle_cls / use_gpu。按构造函数实际接受哪些参数来适配。
+                init_params = inspect.signature(PaddleOCR.__init__).parameters  # type: ignore[arg-type]
+                if "use_angle_cls" in init_params:
+                    params["use_angle_cls"] = True
+                if self.use_gpu:
+                    if "device" in init_params:
+                        params["device"] = "gpu:0"
+                    elif "use_gpu" in init_params:
+                        params["use_gpu"] = True
+                logger.info("加载 PaddleOCR(lang=%s, gpu=%s) ...", self.lang, self.use_gpu)
+                ocr = PaddleOCR(**params)
+            except ImportError as e:
+                raise BackendUnavailableError("PaddleOCR 未安装。") from e
+            except Exception as e:
+                raise BackendUnavailableError(f"PaddleOCR 初始化失败: {e}") from e
+            PaddleOCRBackend._predictor = ocr
+            return ocr
 
     async def describe_image(
         self,
