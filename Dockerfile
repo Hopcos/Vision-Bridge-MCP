@@ -5,7 +5,8 @@
 #       · local_api   : 本地多模态模型（OpenAI 兼容，容器内可用
 #                       http://host.docker.internal:8001/v1 访问宿主机服务）
 #       · tesseract   : 轻量 OCR（镜像默认已内置 tesseract + 中/英文语言包 + pytesseract）
-#       · paddleocr   : 纯 OCR（需以 --build-arg PIP_EXTRAS=all 重新构建，体积大）
+#       · paddleocr   : 纯 OCR（需以 --build-arg PIP_EXTRAS=all 重新构建，体积大；
+#                       镜像已内置其运行所需的系统库 libgl1/libglib2.0-0/libgomp1）
 #   - 需要识别中文时必须挂载中文字体到 $HOME/.fonts（容器默认非 root 用户
 #     vision（uid=1000），家目录 /home/vision；Debian 自带 DejaVu 字体不含中文）
 #   - 容器内已内置调试工具：curl / ping(iputils-ping) / dig(nslookup) / nc / ps；
@@ -55,10 +56,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 # 系统依赖：tesseract OCR（中/英文语言包）+ 常用调试工具（curl/ping/dig/nc/ps）
 # + sudo（非 root 用户临时安装）/passwd(useradd)/ca-certificates
+# + libgl1/libglib2.0-0/libgomp1：PaddlePaddle(PIR) 运行时系统库（libGL.so.1 / libgomp.so.1），
+#   使用 paddleocr 后端必需，否则 import 报 libGL.so.1: cannot open shared object file
 # 再创建命名用户 vision（uid/gid=1000）并授予免密 sudo，避免出现 "I have no name!"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
+       libgl1 libglib2.0-0 libgomp1 \
        curl iputils-ping dnsutils netcat-openbsd procps \
        sudo passwd ca-certificates bash \
     && rm -rf /var/lib/apt/lists/* \
