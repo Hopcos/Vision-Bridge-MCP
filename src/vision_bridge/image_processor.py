@@ -67,8 +67,9 @@ async def preprocess_image(
 
     参数:
         image_bytes: 原始图片字节。
-        max_width: 缩放目标最大宽度。
-        max_height: 缩放目标最大高度。
+        max_width: 缩放目标最大宽度（<=0 表示不限制，仅按 max_height 等比缩放）。
+        max_height: 缩放目标最大高度（<=0 表示不限制，仅按 max_width 等比缩放）。
+            缩放始终按比例进行（contain 模式），整图完整保留，不会裁剪或拉伸。
         output_format: 输出格式（JPEG / PNG / WEBP）。
         quality: JPEG 压缩质量 1-100。
         target_bytes: 压缩目标字节数上限；> 0 时迭代降低质量 / 尺寸直到满足。
@@ -230,7 +231,7 @@ def _compress_to_target(
         else:
             scale *= 0.85
             w, h = img.size
-            new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            new_size = (max(1, int(w * scale + 0.5)), max(1, int(h * scale + 0.5)))
             last_img = img.resize(new_size, Image.LANCZOS)
         rounds += 1
     note = (
@@ -257,7 +258,7 @@ def _compress_png_to_target(
             break
         scale *= 0.8
         w, h = img.size
-        new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+        new_size = (max(1, int(w * scale + 0.5)), max(1, int(h * scale + 0.5)))
         last_img = img.resize(new_size, Image.LANCZOS)
         rounds += 1
     note = (
@@ -268,13 +269,30 @@ def _compress_png_to_target(
 
 
 def _scale(img: Image.Image, max_width: int, max_height: int) -> Image.Image:
-    """按最大宽高等比缩放（至少一边超过限制才缩小）。"""
+    """按最大宽高等比缩放（contain 模式：整图完整保留，只缩放，绝不裁剪 / 拉伸）。
+
+    - 限制值 ``<= 0`` 表示该方向不设限（只按另一方向等比缩放）；
+    - 缩放系数取两个方向的较小者，保证整图完整落入限制内；
+    - 小于限制的图片原样返回（不放大）；
+    - 输出尺寸四舍五入并钳制在限制内，避免逐边截断导致长宽比漂移。
+    """
     w, h = img.size
-    if w <= max_width and h <= max_height:
+    if w <= 0 or h <= 0:
         return img
-    ratio = min(max_width / w, max_height / h)
-    new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
-    return img.resize(new_size, Image.LANCZOS)
+    ratio = 1.0
+    if max_width and max_width > 0:
+        ratio = min(ratio, max_width / w)
+    if max_height and max_height > 0:
+        ratio = min(ratio, max_height / h)
+    if ratio >= 1.0:
+        return img
+    new_w = int(w * ratio + 0.5)
+    new_h = int(h * ratio + 0.5)
+    if max_width and max_width > 0:
+        new_w = min(new_w, max_width)
+    if max_height and max_height > 0:
+        new_h = min(new_h, max_height)
+    return img.resize((max(1, new_w), max(1, new_h)), Image.LANCZOS)
 
 
 def _read_exif_orientation(img: Image.Image) -> int | None:
@@ -344,7 +362,11 @@ async def preprocess_pipeline(
     target_bytes: int = 0,
     min_quality: int = 40,
 ) -> PreprocessedImage:
-    """供外部调用的统一入口（语义化命名，内部仍是 preprocess_image）。"""
+    """供外部调用的统一入口（语义化命名，内部仍是 preprocess_image）。
+
+    max_width / max_height 语义同 preprocess_image：<=0 表示该方向不设限，
+    按比例缩放（contain），整图保留、不裁剪。
+    """
     return await preprocess_image(
         image_bytes,
         max_width=max_width,

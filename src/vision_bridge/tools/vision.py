@@ -118,7 +118,8 @@ async def describe_image(
         image_source: 图片来源（本地路径 / base64(data URL) / HTTP(S) URL）。
         prompt: 针对图片的特定问题，如「这段代码报了什么错？」。
         detail_level: brief（简要描述）/ detailed（详细描述）/ raw_text（纯文字提取）。
-        max_width: 发送给视觉模型前图片缩放的最大宽度（像素）。
+        max_width: 发送给视觉模型前图片缩放的最大宽度（像素）。按此宽度**等比缩放**，
+            整图保留、不裁剪、不拉伸；高度不额外设限。
         language: 期望的输出语言，默认 zh。
     """
     try:

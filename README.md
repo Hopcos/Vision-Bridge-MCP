@@ -730,7 +730,7 @@ Options:
 | image_source | 是 | - | 本地路径 / base64(含 data URL、带换行/URL-safe/无填充的「base64 二进制」) / URL |
 | prompt | 否 | - | 针对图片的具体问题 |
 | detail_level | 否 | detailed | brief / detailed / raw_text |
-| max_width | 否 | 1920 | 缩放最大宽度 |
+| max_width | 否 | 1920 | 缩放最大宽度（**等比缩放**、整图保留不裁剪；高度不额外设限） |
 | language | 否 | zh | 输出语言 |
 
 返回值示例：

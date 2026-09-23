@@ -71,6 +71,9 @@ async def resolve_and_preprocess(
 ) -> PreparedImage:
     """一站式：解析图片来源 → 校验 → 预处理为 JPEG → 返回 PreparedImage。
 
+    缩放策略：按 ``max_width`` **等比缩放**（contain 模式，高度不设限），
+    整图完整保留，绝不裁剪 / 拉伸 —— 与工具参数文档「max_width: 缩放最大宽度」一致。
+
     异常:
         ImageSourceError / ImageFormatError / ImageSizeError / VisionError
     """
@@ -87,6 +90,7 @@ async def resolve_and_preprocess(
     pre = await preprocess_image(
         raw,
         max_width=max_width,
+        max_height=0,  # 不限制高度：仅按 max_width 等比缩放，避免竖屏长图被高度上限压扁
         target_bytes=target_bytes,
         min_quality=min_quality,
     )
