@@ -69,11 +69,7 @@ class PaddleOCRBackend(VisionBackend):
             if PaddleOCRBackend._predictor is not None:
                 return PaddleOCRBackend._predictor
             if _paddleocr_importable() is False:
-                err = (
-                    "PaddleOCR 未安装。请执行: "
-                    "pip install 'vision-bridge-mcp-server[paddleocr]' "
-                    "或 pip install paddleocr paddlepaddle"
-                )
+                err = _paddleocr_not_installed_message()
                 PaddleOCRBackend._predictor_error = err
                 raise BackendUnavailableError(err)
             try:
@@ -100,7 +96,16 @@ class PaddleOCRBackend(VisionBackend):
                 logger.info("加载 PaddleOCR(lang=%s, gpu=%s) ...", self.lang, self.use_gpu)
                 ocr = PaddleOCR(**params)
             except ImportError as e:
-                err = "PaddleOCR 未安装。"
+                # 区分「真没装」与「装了但导入失败」：后者的真实原因通常是
+                # paddlepaddle 缺失 / 版本与 Python 或 paddleocr 不兼容。
+                if _paddleocr_installed():
+                    err = (
+                        f"PaddleOCR 包已安装但导入失败: {e}。"
+                        "常见原因：paddlepaddle 未安装、版本与当前 Python / paddleocr 不兼容，"
+                        "或 PaddleX 依赖缺失。可尝试: pip install 'vision-bridge-mcp-server[paddleocr]' 重新安装。"
+                    )
+                else:
+                    err = _paddleocr_not_installed_message()
                 PaddleOCRBackend._predictor_error = err
                 raise BackendUnavailableError(err) from e
             except Exception as e:
@@ -295,4 +300,26 @@ def _paddleocr_importable() -> bool | None:
         return None
 
 
-__all__ = ["PaddleOCRBackend", "_extract_text", "_extract_ocr_line", "_paddleocr_importable"]
+def _paddleocr_installed() -> bool:
+    """是否存在 paddleocr 包（仅查 spec，不触发导入）。"""
+    return _paddleocr_importable() is True
+
+
+def _paddleocr_not_installed_message() -> str:
+    """paddleocr 未安装时的提示（含 Docker 部署排查指引）。"""
+    return (
+        "PaddleOCR 未安装（环境中找不到 paddleocr 包）。请执行: "
+        "pip install 'vision-bridge-mcp-server[paddleocr]' 或 pip install paddleocr paddlepaddle。"
+        "若是 Docker 部署，请确认构建参数 PIP_EXTRAS=all 已生效"
+        "（.env 中设置 PIP_EXTRAS=all，或 docker compose build --build-arg PIP_EXTRAS=all），"
+        "然后重建镜像。"
+    )
+
+
+__all__ = [
+    "PaddleOCRBackend",
+    "_extract_text",
+    "_extract_ocr_line",
+    "_paddleocr_importable",
+    "_paddleocr_installed",
+]

@@ -144,6 +144,39 @@ class TestPaddleOCR:
         assert str(exc2.value) == str(exc1.value)
         assert len(init_calls) == 1, f"失败后仍重试了 {len(init_calls)} 次"
 
+    @pytest.mark.asyncio
+    async def test_not_installed_message_has_deploy_hint(self, monkeypatch):
+        """未安装 paddleocr 时，报错应包含 Docker 部署的 PIP_EXTRAS 排查指引。"""
+        monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_importable", lambda: False)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor", None)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor_error", None)
+
+        b = PaddleOCRBackend(_paddle_settings())
+        with pytest.raises(BackendUnavailableError) as exc:
+            await asyncio.to_thread(b._load_predictor)
+        assert "PaddleOCR 未安装" in str(exc.value)
+        assert "PIP_EXTRAS=all" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_installed_but_import_error_reports_real_cause(self, monkeypatch):
+        """已安装 paddleocr 但导入失败时，应报告真实原因而不是笼统的「未安装」。"""
+        import sys
+        import types
+
+        # 假模块存在但不含 PaddleOCR 属性 → `from paddleocr import PaddleOCR` 抛 ImportError
+        fake_module = types.ModuleType("paddleocr")
+        monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+        monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_importable", lambda: True)
+        monkeypatch.setattr("vision_bridge.backends.paddleocr_backend._paddleocr_installed", lambda: True)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor", None)
+        monkeypatch.setattr(PaddleOCRBackend, "_predictor_error", None)
+
+        b = PaddleOCRBackend(_paddle_settings())
+        with pytest.raises(BackendUnavailableError) as exc:
+            await asyncio.to_thread(b._load_predictor)
+        assert "已安装但导入失败" in str(exc.value)
+        assert "cannot import name" in str(exc.value)  # 包含真实异常原因
+
     def test_extract_text_forms(self):
         # ComposeResult 简单形态：[box, text, score]
         result = [
