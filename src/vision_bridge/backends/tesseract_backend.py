@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import shutil
 import subprocess
@@ -70,10 +71,23 @@ class TesseractBackend(VisionBackend):
                 "pytesseract 未安装，请执行: pip install 'vision-bridge-mcp-server[tesseract]'"
             ) from e
 
+        # 让 pytesseract 使用配置指定的 tesseract 可执行文件
+        # （VISION_TESSERACT_CMD 可为完整路径；不覆盖时保留默认 PATH 探测）
+        pt_config = getattr(pytesseract, "pytesseract", None)
+        if pt_config is not None:
+            pt_config.tesseract_cmd = self.cmd
+
         try:
+            # pytesseract 只接受 PIL Image / numpy 数组 / 文件路径，
+            # 不接受原始字节 —— 必须先把 bytes 解码为 PIL Image 再调用。
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(image_bytes))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
             text = await asyncio.to_thread(
                 pytesseract.image_to_string,
-                image_bytes,  # PIL 接受字节还是需要 Image 对象
+                image,
                 lang=self.lang,
                 config="--psm 6",
             )

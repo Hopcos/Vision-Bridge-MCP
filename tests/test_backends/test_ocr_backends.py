@@ -96,3 +96,42 @@ class TestTesseract:
         # 无论本机装没装都允许
         status = await b.health_check()
         assert status.status in {"available", "not_installed", "unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_describe_decodes_bytes_to_pil(self, monkeypatch):
+        """回归：describe_image 必须把原始字节解码为 PIL Image 再交给 pytesseract。
+
+        修复前直接把 image_bytes 传给 pytesseract 会抛
+        ``TypeError: Unsupported image object``，导致 tesseract 后端「状态可用、
+        一调用就失败」。这里注入假 pytesseract 模块，仅断言调用形态。
+        """
+        import io
+        import sys
+        import types
+
+        from PIL import Image
+
+        captured: dict[str, object] = {}
+
+        def fake_image_to_string(image, lang=None, config=None):
+            captured["is_pil"] = isinstance(image, Image.Image)
+            captured["size"] = image.size
+            captured["lang"] = lang
+            return "Hi 你好"
+
+        fake_module = types.ModuleType("pytesseract")
+        fake_module.image_to_string = fake_image_to_string
+        monkeypatch.setitem(sys.modules, "pytesseract", fake_module)
+
+        b = TesseractBackend(_tess_settings())
+        monkeypatch.setattr(b, "_tesseract_available", lambda: True)
+
+        img = Image.new("RGB", (320, 100), "white")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        text = await b.describe_image(buf.getvalue(), "", "raw_text")
+
+        assert "Hi 你好" in text
+        assert captured["is_pil"] is True
+        assert captured["size"] == (320, 100)
+        assert captured["lang"] == "chi_sim+eng"
